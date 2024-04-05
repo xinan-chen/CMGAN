@@ -18,11 +18,12 @@ def pesq_loss(clean, noisy, sr=16000):
 def batch_pesq(clean, noisy):
     pesq_score = Parallel(n_jobs=-1)(
         delayed(pesq_loss)(c, n) for c, n in zip(clean, noisy)
-    )
+    )# zip将清晰语音和噪声语音配对 delayed 函数用于包装 n_jobs=-1 表示使用所有可用的 CPU 核心
+    # pesq_score 是一个列表，包含了每一对清晰语音和噪声语音的 PESQ 得分
     pesq_score = np.array(pesq_score)
     if -1 in pesq_score:
         return None
-    pesq_score = (pesq_score - 1) / 3.5
+    pesq_score = (pesq_score - 1) / 3.5 # 归一化？
     return torch.FloatTensor(pesq_score).to("cuda")
 
 

@@ -1,4 +1,4 @@
-from models.conformer import ConformerBlock
+from models.conformer import ConformerBlock, CRNNBlock, CRNNBlock_t
 import torch
 import torch.nn as nn
 
@@ -172,10 +172,126 @@ class TSCNet(nn.Module):
         self.complex_decoder = ComplexDecoder(num_channel=num_channel)
 
     def forward(self, x):
+        # x(batchsize,2,T,F)
         mag = torch.sqrt(x[:, 0, :, :] ** 2 + x[:, 1, :, :] ** 2).unsqueeze(1)
         noisy_phase = torch.angle(
             torch.complex(x[:, 0, :, :], x[:, 1, :, :])
         ).unsqueeze(1)
+        x_in = torch.cat([mag, x], dim=1)
+        # x_in(batchsize,3,T,F)
+
+        out_1 = self.dense_encoder(x_in)
+        out_2 = self.TSCB_1(out_1)
+        out_3 = self.TSCB_2(out_2)
+        out_4 = self.TSCB_3(out_3)
+        out_5 = self.TSCB_4(out_4)
+
+        mask = self.mask_decoder(out_5)
+        # 此处修改乘号
+        out_mag = mask + mag
+
+        complex_out = self.complex_decoder(out_5)
+        mag_real = out_mag * torch.cos(noisy_phase)
+        mag_imag = out_mag * torch.sin(noisy_phase)
+        final_real = mag_real + complex_out[:, 0, :, :].unsqueeze(1)
+        final_imag = mag_imag + complex_out[:, 1, :, :].unsqueeze(1)
+
+        return final_real, final_imag
+        # (batchsize,1,T,F)
+
+class TSCNet1(nn.Module):
+    def __init__(self, num_channel=64, num_features=201):
+        super(TSCNet1, self).__init__()
+        self.dense_encoder = DenseEncoder(in_channel=3, channels=num_channel)
+
+        self.TSCB_1 = TSCB(num_channel=num_channel)
+        self.TSCB_2 = TSCB(num_channel=num_channel)
+        self.TSCB_3 = TSCB(num_channel=num_channel)
+        self.TSCB_4 = TSCB(num_channel=num_channel)
+
+        self.mask_decoder = MaskDecoder(
+            num_features, num_channel=num_channel, out_channel=1
+        )
+        # self.complex_decoder = ComplexDecoder(num_channel=num_channel)
+
+    def forward(self, x):
+        # x(batchsize,2,T,F)
+        mag = torch.sqrt(x[:, 0, :, :] ** 2 + x[:, 1, :, :] ** 2).unsqueeze(1)
+        noisy_phase = torch.angle(
+            torch.complex(x[:, 0, :, :], x[:, 1, :, :])
+        ).unsqueeze(1)
+        x_in = torch.cat([mag, x], dim=1)
+        # x_in(batchsize,3,T,F)
+
+        out_1 = self.dense_encoder(x_in)
+        out_2 = self.TSCB_1(out_1)
+        out_3 = self.TSCB_2(out_2)
+        out_4 = self.TSCB_3(out_3)
+        out_5 = self.TSCB_4(out_4)
+
+        mask = self.mask_decoder(out_5)
+        # 此处修改乘号
+        out_mag = mask + mag
+
+        # complex_out = self.complex_decoder(out_5)
+        mag_real = out_mag * torch.cos(noisy_phase)
+        mag_imag = out_mag * torch.sin(noisy_phase)
+        final_real = mag_real
+        final_imag = mag_imag
+
+        return final_real, final_imag
+        # (batchsize,1,T,F)
+
+class TSCB_FRNN(nn.Module):
+    def __init__(self, width, num_channel=64):
+        super(TSCB_FRNN, self).__init__()
+        self.time_conformer = ConformerBlock(dim=num_channel, dim_head=num_channel//4, heads=4,
+                                             conv_kernel_size=31, attn_dropout=0.2, ff_dropout=0.2)
+        self.freq_conformer = CRNNBlock(dim=num_channel, width=width, dim_head=num_channel//4, heads=4,
+                                             conv_kernel_size=31, attn_dropout=0.2, ff_dropout=0.2)
+
+    def forward(self, x_in):
+        b, c, t, f = x_in.size()
+        x_t = x_in.permute(0, 3, 2, 1).contiguous().view(b*f, t, c)
+        x_t = self.time_conformer(x_t) + x_t
+        x_f = x_t.view(b, f, t, c).permute(0, 2, 1, 3).contiguous().view(b*t, f, c)
+        x_f = self.freq_conformer(x_f) + x_f
+        x_f = x_f.view(b, t, f, c).permute(0, 3, 1, 2)
+        return x_f
+
+class TSCB_DFRNN(nn.Module):
+    def __init__(self, width, num_channel=64):
+        super(TSCB_DFRNN, self).__init__()
+        self.time_conformer = CRNNBlock_t(dim=num_channel, width=width, dim_head=num_channel//4, heads=4,
+                                             conv_kernel_size=31, attn_dropout=0.2, ff_dropout=0.2)
+        self.freq_conformer = CRNNBlock(dim=num_channel, width=width, dim_head=num_channel//4, heads=4,
+                                             conv_kernel_size=31, attn_dropout=0.2, ff_dropout=0.2)
+
+    def forward(self, x_in):
+        b, c, t, f = x_in.size()
+        x_t = x_in.permute(0, 3, 2, 1).contiguous().view(b*f, t, c)
+        x_t = self.time_conformer(x_t) + x_t
+        x_f = x_t.view(b, f, t, c).permute(0, 2, 1, 3).contiguous().view(b*t, f, c)
+        x_f = self.freq_conformer(x_f) + x_f
+        x_f = x_f.view(b, t, f, c).permute(0, 3, 1, 2)
+        return x_f
+
+class TSCNet_FRNN(nn.Module):
+    def __init__(self, num_channel=64, num_features=201):
+        super(TSCNet_FRNN, self).__init__()
+        self.dense_encoder = DenseEncoder(in_channel=3, channels=num_channel)
+
+        self.TSCB_1 = TSCB_FRNN(101,num_channel=num_channel)
+        self.TSCB_2 = TSCB_FRNN(101,num_channel=num_channel)
+        self.TSCB_3 = TSCB_FRNN(101,num_channel=num_channel)
+        self.TSCB_4 = TSCB_FRNN(101,num_channel=num_channel)
+
+        self.mask_decoder = MaskDecoder(num_features, num_channel=num_channel, out_channel=1)
+        self.complex_decoder = ComplexDecoder(num_channel=num_channel)
+
+    def forward(self, x):
+        mag = torch.sqrt(x[:, 0, :, :]**2 + x[:, 1, :, :]**2).unsqueeze(1)
+        noisy_phase = torch.angle(torch.complex(x[:, 0, :, :], x[:, 1, :, :])).unsqueeze(1)
         x_in = torch.cat([mag, x], dim=1)
 
         out_1 = self.dense_encoder(x_in)
@@ -185,7 +301,43 @@ class TSCNet(nn.Module):
         out_5 = self.TSCB_4(out_4)
 
         mask = self.mask_decoder(out_5)
-        out_mag = mask * mag
+        out_mag = mask + mag
+
+        complex_out = self.complex_decoder(out_5)
+        mag_real = out_mag * torch.cos(noisy_phase)
+        mag_imag = out_mag * torch.sin(noisy_phase)
+        final_real = mag_real + complex_out[:, 0, :, :].unsqueeze(1)
+        final_imag = mag_imag + complex_out[:, 1, :, :].unsqueeze(1)
+
+        return final_real, final_imag
+    
+
+class TSCNet_DFRNN(nn.Module):
+    def __init__(self, num_channel=64, num_features=201):
+        super(TSCNet_DFRNN, self).__init__()
+        self.dense_encoder = DenseEncoder(in_channel=3, channels=num_channel)
+
+        self.TSCB_1 = TSCB_DFRNN(101,num_channel=num_channel)
+        self.TSCB_2 = TSCB_DFRNN(101,num_channel=num_channel)
+        self.TSCB_3 = TSCB_DFRNN(101,num_channel=num_channel)
+        self.TSCB_4 = TSCB_DFRNN(101,num_channel=num_channel)
+
+        self.mask_decoder = MaskDecoder(num_features, num_channel=num_channel, out_channel=1)
+        self.complex_decoder = ComplexDecoder(num_channel=num_channel)
+
+    def forward(self, x):
+        mag = torch.sqrt(x[:, 0, :, :]**2 + x[:, 1, :, :]**2).unsqueeze(1)
+        noisy_phase = torch.angle(torch.complex(x[:, 0, :, :], x[:, 1, :, :])).unsqueeze(1)
+        x_in = torch.cat([mag, x], dim=1)
+
+        out_1 = self.dense_encoder(x_in)
+        out_2 = self.TSCB_1(out_1)
+        out_3 = self.TSCB_2(out_2)
+        out_4 = self.TSCB_3(out_3)
+        out_5 = self.TSCB_4(out_4)
+
+        mask = self.mask_decoder(out_5)
+        out_mag = mask + mag
 
         complex_out = self.complex_decoder(out_5)
         mag_real = out_mag * torch.cos(noisy_phase)

@@ -18,7 +18,8 @@ def kaiming_init(m):
 
 
 def power_compress(x):
-    real = x[..., 0]
+    # 最后一个维度为虚实 结果中为dim=1
+    real = x[..., 0] # ... 是一个 Ellipsis 对象，代表了任意数量的冒号（:）
     imag = x[..., 1]
     spec = torch.complex(real, imag)
     mag = torch.abs(spec)
@@ -26,16 +27,19 @@ def power_compress(x):
     mag = mag**0.3
     real_compress = mag * torch.cos(phase)
     imag_compress = mag * torch.sin(phase)
+    # 输出(:,2,:,:)
     return torch.stack([real_compress, imag_compress], 1)
 
 
 def power_uncompress(real, imag):
+    # 输入(batchsize,1,F,T)
     spec = torch.complex(real, imag)
     mag = torch.abs(spec)
     phase = torch.angle(spec)
     mag = mag ** (1.0 / 0.3)
     real_compress = mag * torch.cos(phase)
     imag_compress = mag * torch.sin(phase)
+    # 输出(batchsize,1,F,T,2)
     return torch.stack([real_compress, imag_compress], -1)
 
 

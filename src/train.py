@@ -18,10 +18,10 @@ from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--epochs", type=int, default=120, help="number of epochs of training")
+parser.add_argument("--epochs", type=int, default=75, help="number of epochs of training")
 parser.add_argument("--batch_size", type=int, default=2)
 parser.add_argument("--log_interval", type=int, default=0) # 多少个batch生成log
-parser.add_argument("--decay_epoch", type=int, default=30, help="epoch from which to start lr decay")
+parser.add_argument("--decay_epoch", type=int, default=20, help="epoch from which to start lr decay")
 parser.add_argument("--init_lr", type=float, default=5e-4, help="initial learning rate")
 parser.add_argument("--cut_len", type=int, default=16000*2, help="cut length, default is 2 seconds in denoise "
                                                                  "and dereverberation")
@@ -29,7 +29,7 @@ parser.add_argument("--data_dir", type=str, default='/data/hdd1/xinan.chen/VCTK_
                     help="dir of VCTK+DEMAND dataset")
 parser.add_argument("--save_model_dir", type=str, default='./saved_model',
                     help="dir of saved model")
-parser.add_argument("--loss_weights", type=list, default=[0.1, 0.9, 0.2, 0.05],
+parser.add_argument("--loss_weights", type=list, default=[0.3, 0.7, 1, 0.01],
                     help="weights of RI components, magnitude, time loss, and Metric Disc")
 
 parser.add_argument("--n_cpu", type=int, default=2, help="number of cpu threads to use during batch generation")
@@ -298,6 +298,8 @@ class Trainer:
             writer = SummaryWriter(log_dir=os.path.join("runs", now_time))    
            
         for epoch in range(args.epochs):
+            if self.gpu_id == 0:
+                print("Epoch start:", epoch, now_time)
             self.model.train()
             self.discriminator.train()
             gen_loss_total = 0.0
@@ -336,9 +338,11 @@ class Trainer:
                     best_epoch = epoch
                     writer.add_scalar('best_loss', gen_loss_test, epoch)
                     # best_path = path
+                print("Epoch end:", epoch)
             # （可能）更新学习率
             scheduler_G.step() 
             scheduler_D.step()
+            
             
         # 将最好的模型复制到best_ckpt文件夹下
         if self.gpu_id == 0:
@@ -356,6 +360,8 @@ class Trainer:
 
 
 def main(rank: int, world_size: int, args):
+    import warnings
+    warnings.filterwarnings('ignore')
     ddp_setup(rank, world_size)
     torch.cuda.set_device(rank)
     if rank == 0:
@@ -381,6 +387,6 @@ def main(rank: int, world_size: int, args):
 
 if __name__ == "__main__":
     # world_size = torch.cuda.device_count()
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0,7"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "6"
     world_size = len(os.environ["CUDA_VISIBLE_DEVICES"].split(","))
     mp.spawn(main, args=(world_size, args), nprocs=world_size)

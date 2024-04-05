@@ -11,8 +11,7 @@ import datetime
 import matplotlib.pyplot as plt
 from tqdm import tqdm
 import warnings
-
-warnings.filterwarnings('ignore', category=UserWarning)
+warnings.filterwarnings("ignore")
 
 def plot_spectrogram(waveform, save_dir, title=None, n_fft=2048, hop_length=512):
     fig, ax = plt.subplots(figsize=(6, 4))
@@ -223,7 +222,7 @@ def evaluation(args, noisy_dir, clean_dir):
     )
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--model_path", type=str, default='./src/best_ckpt/ckpt_03_31_15_54',
+parser.add_argument("--model_path", type=str, default='./src/best_ckpt/ckpt_04_04_19_30',
                     help="the path where the model is saved")
 parser.add_argument("--test_dir", type=str, default='/data/hdd1/xinan.chen/VCTK_wav_single/test',
                     help="noisy tracks dir to be enhanced")
@@ -235,7 +234,7 @@ args = parser.parse_args()
 
 
 if __name__ == "__main__":
-    os.environ["CUDA_VISIBLE_DEVICES"] = "0,7"
+    os.environ["CUDA_VISIBLE_DEVICES"] = "6"
     noisy_dir = os.path.join(args.test_dir, "noisy")
     clean_dir = os.path.join(args.test_dir, "clean")
     evaluation(args, noisy_dir, clean_dir)
