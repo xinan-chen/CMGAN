@@ -152,8 +152,10 @@ if __name__ == '__main__':
     # p.append(torch.ones(2,2))
     # sum = sum(a for a in p)
     # print(sum)
-    b= 0+0j
+    b= 1+2j
     b = torch.tensor([b])
-    print(torch.angle(b)*180/torch.pi)
-    print(torch.atan2(b.imag,b.real)*180/torch.pi)
+    c = torch.tensor([b])*2
+    from torch.nn.functional import mse_loss
+    s = mse_loss(b, c)
+    print(s)
 

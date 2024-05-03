@@ -1,5 +1,4 @@
 # 数据预处理，将flac格式的音频文件转换为wav格式，48khz降采样至16kHz，并产生8/4/2khz低通滤波信号作为输入，分为训练集和测试集
-# question：低通滤波有效性
 import os
 import argparse
 import torchaudio
@@ -7,8 +6,8 @@ import torch
 import numpy as np
 from torchaudio.transforms import Resample, Vad
 from tqdm import tqdm
-from scipy.signal import cheby1, cheby2, butter, ellip, bessel
-from scipy.signal import sosfiltfilt
+from scipy.signal import iirfilter, filtfilt
+from natsort import natsorted
 
 
 parser = argparse.ArgumentParser()
@@ -18,7 +17,7 @@ parser.add_argument('--save_path', type=str, default='/data/hdd1/xinan.chen/VCTK
 parser.add_argument('--downsample_rate', type=int, default=2, help='downsample rate')
 
 # for single file numbers, for multi speaker numbers
-# 223 8
+# 223 8 100 8
 parser.add_argument('--train_num', type=int, default=100, help='train num')
 parser.add_argument('--test_num', type=int, default=8, help='test num')
 
@@ -66,11 +65,16 @@ if __name__ == '__main__':
     
 
     # flac to wav
-    idx = -1
-    for root, dirs, files in tqdm(os.walk(data_path)):
-        idx += 1
-        for file in files:
+    idx = -1 if args.mode == "multi" else 0
+    for root, dirs, files in os.walk(data_path):
+        if args.mode == "multi":
+            dirs[:] = natsorted(dirs)
+            idx += 1
+        files = natsorted(files)
+        for file in tqdm(files):
             if file.endswith("_mic1.flac"):
+                if args.mode == "single" :
+                    idx += 1
                 # if idx%10==0:
                 #     print(file,"done")
                 file_path = os.path.join(root, file)
@@ -95,8 +99,8 @@ if __name__ == '__main__':
                 order = 8
                 ripple = 0.05
                 hi = 1/args.downsample_rate
-                sos = cheby1(order, ripple, hi, btype='lowpass', output='sos')
-                wav_l = sosfiltfilt(sos, wav.numpy().astype(np.float32))
+                b, a =iirfilter(order, hi, rp=ripple, btype='lowpass',ftype='cheby1', output='ba')
+                wav_l = filtfilt(b, a, wav.numpy())
                 wav_l = torch.from_numpy(wav_l.copy()).to(torch.float32)
 
                 assert len(wav_l) == len(wav)

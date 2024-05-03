@@ -5,20 +5,23 @@ from data import dataloader
 import torch.nn.functional as F
 import torch
 from utils import power_compress, power_uncompress
-import logging
+# import logging
 from torchinfo import summary
 import argparse
 import matplotlib.pyplot as plt
 import datetime
 from tqdm import tqdm
 from torch.utils.tensorboard import SummaryWriter
+import random
 
 import torch.multiprocessing as mp
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.distributed import init_process_group, destroy_process_group
+# from torch.distributed.algorithms.join import Join
+
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--epochs", type=int, default=75, help="number of epochs of training")
+parser.add_argument("--epochs", type=int, default=150, help="number of epochs of training")
 parser.add_argument("--batch_size", type=int, default=2)
 parser.add_argument("--log_interval", type=int, default=0) # 多少个batch生成log
 parser.add_argument("--decay_epoch", type=int, default=20, help="epoch from which to start lr decay")
@@ -29,13 +32,13 @@ parser.add_argument("--data_dir", type=str, default='/data/hdd1/xinan.chen/VCTK_
                     help="dir of VCTK+DEMAND dataset")
 parser.add_argument("--save_model_dir", type=str, default='./saved_model',
                     help="dir of saved model")
-parser.add_argument("--loss_weights", type=list, default=[0.3, 0.7, 1, 0.01],
+parser.add_argument("--loss_weights", type=list, default=[0.3, 0.7, 0, 0],
                     help="weights of RI components, magnitude, time loss, and Metric Disc")
 
 parser.add_argument("--n_cpu", type=int, default=2, help="number of cpu threads to use during batch generation")
 
 args = parser.parse_args()
-logging.basicConfig(level=logging.INFO) # 将记录INFO级别及以上的日志
+# logging.basicConfig(level=logging.INFO) # 将记录INFO级别及以上的日志
 
 
 def ddp_setup(rank, world_size):
@@ -51,10 +54,15 @@ def ddp_setup(rank, world_size):
     # 表示使用NCCL（NVIDIA Collective Communications Library）作为后端进行通信，它是NVIDIA提供的一个优化了GPU之间通信的库
     init_process_group(backend="nccl", rank=rank, world_size=world_size)
 
+def set_seed(seed):
+    random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 class Trainer:
-    def __init__(self, train_ds, test_ds, gpu_id: int):
-
+    def __init__(self, train_ds, test_ds, gpu_id: int, num_processes: int):
+        self.num_processes = num_processes
         self.n_fft = 400
         self.hop = 100
         self.train_ds = train_ds
@@ -246,7 +254,7 @@ class Trainer:
 
         clean = batch[0].to(self.gpu_id)
         noisy = batch[1].to(self.gpu_id)
-        one_labels = torch.ones(args.batch_size).to(self.gpu_id)
+        one_labels = torch.ones(clean.size(0)).to(self.gpu_id)
 
         generator_outputs = self.forward_generator_step(
             clean,
@@ -268,6 +276,7 @@ class Trainer:
         self.discriminator.eval()
         gen_loss_total = 0.0
         disc_loss_total = 0.0
+        step = 1
         for idx, batch in enumerate(self.test_ds):
             step = idx + 1
             loss, disc_loss = self.test_step(batch)
@@ -296,10 +305,12 @@ class Trainer:
 
         if self.gpu_id == 0:
             writer = SummaryWriter(log_dir=os.path.join("runs", now_time))    
-           
+        
+        # with Join([self.model]):
         for epoch in range(args.epochs):
             if self.gpu_id == 0:
-                print("Epoch start:", epoch, now_time)
+                now = datetime.datetime.now().strftime('%m_%d_%H_%M')
+                print("Epoch start:", epoch, now)
             self.model.train()
             self.discriminator.train()
             gen_loss_total = 0.0
@@ -317,16 +328,25 @@ class Trainer:
                 #     )
             gen_loss_train = gen_loss_total / step
             disc_loss_train= disc_loss_total / step
-            gen_loss_test, disc_loss_test= self.test() # 只用生成器loss
+            gen_loss_test, disc_loss_test= self.test() 
+            # gen_loss_train = torch.tensor(gen_loss_train).cuda()
+            # disc_loss_train = torch.tensor(disc_loss_train).cuda()
+            # gen_loss_test = torch.tensor(gen_loss_test).cuda()
+            # disc_loss_test = torch.tensor(disc_loss_test).cuda()
 
-            # 保存模型
+            # torch.distributed.barrier()
 
-            # path = os.path.join(
-            #     save_model_dir,
-            #     "CMGAN_epoch_" + str(epoch) + "_" + str(gen_loss_test)[:5],
-            # )
+            # torch.distributed.reduce(gen_loss_train, dst=0)
+            # torch.distributed.reduce(disc_loss_train, dst=0)
+            # torch.distributed.reduce(gen_loss_test, dst=0)
+            # torch.distributed.reduce(disc_loss_test, dst=0)
 
             if self.gpu_id == 0:
+                
+                # gen_loss_train /= self.num_processes
+                # disc_loss_train /= self.num_processes
+                # gen_loss_test /= self.num_processes
+                # disc_loss_test /= self.num_processes
                 writer.add_scalar('gen_loss_train',gen_loss_train , epoch) 
                 writer.add_scalar('disc_loss_train',disc_loss_train , epoch)
                 writer.add_scalar('gen_loss_test',gen_loss_test , epoch)
@@ -339,6 +359,8 @@ class Trainer:
                     writer.add_scalar('best_loss', gen_loss_test, epoch)
                     # best_path = path
                 print("Epoch end:", epoch)
+            
+            # torch.distributed.barrier()
             # （可能）更新学习率
             scheduler_G.step() 
             scheduler_D.step()
@@ -346,7 +368,7 @@ class Trainer:
             
         # 将最好的模型复制到best_ckpt文件夹下
         if self.gpu_id == 0:
-            logging.info("Best epoch: {}, Best loss: {}".format(best_epoch, best_gen_loss))
+            print("Best epoch: {}, Best loss: {}".format(best_epoch, best_gen_loss))
             torch.save(best_model, "./src/best_ckpt/ckpt_"+now_time)
             # os.system("cp " + best_path + " " + "./src/best_ckpt/ckpt_"+now_time) 
             # os.system("rm -rf " + args.save_model_dir)
@@ -360,8 +382,7 @@ class Trainer:
 
 
 def main(rank: int, world_size: int, args):
-    import warnings
-    warnings.filterwarnings('ignore')
+    set_seed(3407)  
     ddp_setup(rank, world_size)
     torch.cuda.set_device(rank)
     if rank == 0:
@@ -380,7 +401,7 @@ def main(rank: int, world_size: int, args):
     train_ds, test_ds = dataloader.load_data(
         args.data_dir, args.batch_size, args.n_cpu, args.cut_len
     )
-    trainer = Trainer(train_ds, test_ds, rank)
+    trainer = Trainer(train_ds, test_ds, rank, world_size)
     trainer.train()
     destroy_process_group()
 

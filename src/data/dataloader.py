@@ -5,6 +5,7 @@ from utils import *
 import random
 from natsort import natsorted
 from scipy.signal import iirfilter, filtfilt, firwin
+import torchaudio.functional as aF
 
 # 允许程序加载多个相同的库到内存中。这通常可以解决因加载了多个OpenMP运行时库而导致的程序崩溃问题。
 os.environ["KMP_DUPLICATE_LIB_OK"] = "True" 
@@ -42,13 +43,13 @@ class DemandDataset(torch.utils.data.Dataset):
                 Wn = 0.5
                 ft = random.choice(['butter', 'cheby1', 'cheby2', 'ellip', 'bessel'])
                 if ft == 'cheby1':
-                    rp = random.choice([1e-6, 1e-3, 1, 5])
+                    rp = random.choice([1e-6, 1e-3, 0.05, 1, 5])
                     rs = None
                 elif ft == 'cheby2':
                     rp = None
                     rs = random.choice([20, 40, 60, 80])
                 elif ft == 'ellip':
-                    rp = random.choice([1e-6, 1e-3, 1, 5])
+                    rp = random.choice([1e-6, 1e-3, 0.05, 1, 5])
                     rs = random.choice([20, 40, 60, 80])
                 else:
                     rp = None
@@ -62,6 +63,10 @@ class DemandDataset(torch.utils.data.Dataset):
 
         wav_l = filtfilt(b, a, wav.numpy())
         wav_l = torch.from_numpy(wav_l.copy()).to(torch.float32)
+        # length = wav.size(-1)
+        # wav_l = aF.resample(wav, orig_freq=16000, new_freq=8000)
+        # wav_l = aF.resample(wav_l, orig_freq=8000, new_freq=16000)
+        # wav_l = wav_l[:, : length]
         return wav_l
 
     def __getitem__(self, idx):
